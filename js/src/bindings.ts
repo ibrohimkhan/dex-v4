@@ -30,9 +30,10 @@ import { computeFp32Price } from "./utils";
 /**
  * Constants
  */
-const MARKET_STATE_SPACE = 264;
+const MARKET_STATE_SPACE = 280;
 const NODE_CAPACITY = 100;
 const EVENT_CAPACITY = 100;
+const U64_MAX = "18446744073709551615";
 
 /**
  *
@@ -54,7 +55,9 @@ export const createMarket = async (
   feePayer: PublicKey,
   marketAdmin: PublicKey,
   tickSize: BN,
-  crankerReward: BN
+  crankerReward: BN,
+  baseCurrencyMultiplier?: BN,
+  quoteCurrencyMultiplier?: BN
 ): Promise<PrimedTransaction[]> => {
   // Metadata account
   const metadataAccount = await getMetadataKeyFromMint(baseMint);
@@ -65,6 +68,16 @@ export const createMarket = async (
   const balance = await connection.getMinimumBalanceForRentExemption(
     MARKET_STATE_SPACE
   );
+  if (!baseCurrencyMultiplier) {
+    baseCurrencyMultiplier = new BN(1);
+  }
+  if (!quoteCurrencyMultiplier) {
+    quoteCurrencyMultiplier = new BN(1);
+  }
+
+  // Adjust tick size
+  tickSize = tickSize.mul(baseCurrencyMultiplier).div(quoteCurrencyMultiplier);
+
   const createMarketAccount = SystemProgram.createAccount({
     fromPubkey: feePayer,
     lamports: balance,
@@ -117,6 +130,8 @@ export const createMarket = async (
     minBaseOrderSize: new BN(minBaseOrderSize),
     tickSize: tickSize,
     crankerReward: new BN(crankerReward),
+    baseCurrencyMultiplier,
+    quoteCurrencyMultiplier,
   }).getInstruction(
     DEX_ID,
     marketAccount.publicKey,
@@ -179,20 +194,14 @@ export const placeOrder = async (
     clientOrderId = new BN(crypto.randomBytes(16));
   }
 
-  // const formattedLimitPrice =
-  //   Math.pow(10, market.quoteDecimals - market.baseDecimals) * limitPrice;
-  // const price = new BN(formattedLimitPrice).mul(new BN(Math.pow(2, 32)));
-
   const priceFp32 = computeFp32Price(market, limitPrice);
-
-  const formattedLimitPrice =
-    Math.pow(10, market.quoteDecimals - market.baseDecimals) * limitPrice;
 
   const instruction = new newOrderInstruction({
     side: side as number,
     limitPrice: priceFp32,
-    maxBaseQty: maxBaseQty || new BN(size),
-    maxQuoteQty: maxQuoteQty || new BN(size).mul(new BN(formattedLimitPrice)),
+    maxBaseQty:
+      maxBaseQty || new BN(size * market.baseCurrencyMultiplier.toNumber()),
+    maxQuoteQty: maxQuoteQty || new BN(U64_MAX),
     orderType: type,
     selfTradeBehavior: selfTradeBehaviour,
     matchLimit: new BN(Number.MAX_SAFE_INTEGER),
